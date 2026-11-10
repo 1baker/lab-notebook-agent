@@ -1,5 +1,22 @@
 # Lab Notebook Agent
 
+**In one sentence:** Lab Notebook Agent creates a ready-made spreadsheet lab notebook (reagents, recipes, observations, results), searches what you have recorded, and suggests a next experiment with links to the literature.
+
+**Who it is for:** Lab scientists who want a consistent digital notebook instead of scattered notes.
+
+**How it works:**
+
+```mermaid
+flowchart LR
+    You[You record experiments] --> WB[Notebook spreadsheet]
+    WB --> Agent[Lab Notebook Agent]
+    Agent --> Next[Suggested next experiment]
+    Agent -->|optional| LS[LitScout literature search]
+```
+
+---
+
+
 This is the first scaffold for a Google Sheets-based daily lab notebook agent.
 The workbook is the primary interface: users enter reagents, formulation rows,
 observations, results, and literature evidence in consistent tabs. The local CLI
