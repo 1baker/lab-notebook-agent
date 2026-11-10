@@ -4,6 +4,10 @@
 
 **Who it is for:** Lab scientists who want a consistent digital notebook instead of scattered notes.
 
+![Terminal showing the notebook workbook being created and its eleven tabs](docs/images/how-it-works.png)
+
+*Real output: one command creates the notebook workbook; these are its tabs and first columns.*
+
 **How it works:**
 
 ```mermaid
