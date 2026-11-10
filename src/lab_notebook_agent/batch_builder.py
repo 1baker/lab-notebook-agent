@@ -623,33 +623,56 @@ def formulation_rows_from_tables(
 ) -> list[dict[str, Any]]:
     """Return normalized legacy rows plus scientist-entered Batch Builder charges."""
 
-    rows_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for row in tables.get("Formulations", []):
-        if not isinstance(row, dict):
-            continue
-        key = _formulation_key(row)
-        if key[0] and key[1]:
-            rows_by_key[key] = row
-    for row in tables.get("Batch Builder", []):
-        if not isinstance(row, dict):
-            continue
-        projected = batch_builder_to_formulation_row(row)
-        key = _formulation_key(projected)
-        if key[0] and key[1]:
-            existing = rows_by_key.get(key)
-            if existing is None:
-                rows_by_key[key] = projected
-            else:
-                merged = dict(existing)
-                merged.update(
-                    {
-                        field: value
-                        for field, value in projected.items()
-                        if value not in (None, "")
-                    }
-                )
-                rows_by_key[key] = merged
-    return list(rows_by_key.values())
+    legacy = [row for row in tables.get("Formulations", [])
+              if isinstance(row, dict) and all(_formulation_key(row)[:2])]
+    charges = [batch_builder_to_formulation_row(row) for row in tables.get("Batch Builder", [])
+               if isinstance(row, dict) and all(_formulation_key(row)[:2])]
+    phase_match_counts: dict[tuple[tuple[str, str, str], str], int] = {}
+    for charge in charges:
+        for phase in _charge_phase_aliases(charge):
+            key = (_formulation_key(charge), phase)
+            phase_match_counts[key] = phase_match_counts.get(key, 0) + 1
+    rows = list(legacy)
+    merged_legacy: set[int] = set()
+    for projected in charges:
+        charge_id = str(projected.get("charge_id", "")).strip()
+        exact = [index for index, row in enumerate(rows)
+                 if charge_id and str(row.get("charge_id", "")).strip() == charge_id
+                 and _formulation_key(row)[0] == _formulation_key(projected)[0]]
+        candidates = [index for index, row in enumerate(legacy)
+                      if index not in merged_legacy and not row.get("charge_id")
+                      and _legacy_charge_match(row, projected)
+                      and phase_match_counts.get((_formulation_key(row),
+                          str(row.get("phase", "")).strip().casefold()), 0) == 1]
+        index = exact[0] if exact else candidates[0] if len(candidates) == 1 else None
+        if index is None:
+            rows.append(projected)
+        else:
+            merged = dict(rows[index])
+            merged.update({field: value for field, value in projected.items() if value not in (None, "")})
+            rows[index] = merged
+            if index < len(legacy):
+                merged_legacy.add(index)
+    return rows
+
+
+def _legacy_charge_match(legacy: dict[str, Any], charge: dict[str, Any]) -> bool:
+    if _formulation_key(legacy) != _formulation_key(charge):
+        return False
+    phase = str(legacy.get("phase", "")).strip().casefold()
+    return phase in _charge_phase_aliases(charge)
+
+
+def _charge_phase_aliases(charge: dict[str, Any]) -> set[str]:
+    charge_type = str(charge.get("charge_type", "")).strip().casefold()
+    phases = {"", str(charge.get("phase", "")).strip().casefold(),
+              str(charge.get("stage", "")).strip().casefold(), charge_type.replace("_", " ")}
+    # These labels are the original Formulations compatibility vocabulary.
+    if charge_type == "monomer_pre_emulsion":
+        phases.add("monomer feed")
+    elif charge_type == "aqueous_pre_emulsion":
+        phases.add("aqueous")
+    return phases
 
 
 def _formulation_key(row: dict[str, Any]) -> tuple[str, str, str]:

@@ -94,9 +94,15 @@ def summarize_record_governance(
         if str(row.get("experiment_id", "")).strip() == experiment_id
         and str(row.get("status", "")).strip() == "signed"
     ]
-    witnessed = [row for row in signed if str(row.get("witnessed_by", "")).strip()]
+    fingerprint = str(experiment.get("record_fingerprint", "")).strip()
+    matching = [row for row in signed
+                if not fingerprint
+                or str(row.get("record_fingerprint", "")).strip() == fingerprint]
+    witnessed = [row for row in matching if str(row.get("witnessed_by", "")).strip()]
     if not signed:
         signature_status = "UNSIGNED"
+    elif not matching:
+        signature_status = "SIGNATURE_MISMATCH"
     elif not witnessed:
         signature_status = "SIGNED_UNWITNESSED"
     else:
@@ -158,6 +164,8 @@ def summarize_record_governance(
         governance_status = "SIGNOFF_REQUIRED"
     elif signature_status == "SIGNED_UNWITNESSED":
         governance_status = "WITNESS_REQUIRED"
+    elif signature_status != "SIGNED_WITNESSED":
+        governance_status = signature_status
     else:
         governance_status = "READY_TO_ARCHIVE"
     material_transactions = sum(
@@ -181,6 +189,32 @@ def summarize_record_governance(
         "witnessed_at": latest_witnessed.get("witnessed_at", ""),
         "governance_status": governance_status,
     }
+
+
+def signature_status_expression(run_cell: str, end_row: int = 1000) -> str:
+    """Share the existing-fingerprint readiness rule across Excel and Sheets."""
+
+    signatures = "'Record Signatures'!"
+    run_range = f"{signatures}$B$2:$B${end_row}"
+    status_range = f"{signatures}$H$2:$H${end_row}"
+    fingerprint_range = f"{signatures}$G$2:$G${end_row}"
+    witness_range = f"{signatures}$I$2:$I${end_row}"
+    fingerprint = f'IFERROR(VLOOKUP({run_cell},Experiments!$A$2:$AF${end_row},32,FALSE),"")'
+    signed = f'COUNTIFS({run_range},{run_cell},{status_range},"signed")'
+    witnessed = f'COUNTIFS({run_range},{run_cell},{status_range},"signed",{witness_range},"<>")'
+    matching = (
+        f'IF({fingerprint}="",{signed},'
+        f'COUNTIFS({run_range},{run_cell},{status_range},"signed",{fingerprint_range},{fingerprint}))'
+    )
+    matching_witness = (
+        f'IF({fingerprint}="",{witnessed},'
+        f'COUNTIFS({run_range},{run_cell},{status_range},"signed",{fingerprint_range},{fingerprint},{witness_range},"<>"))'
+    )
+    return (
+        f'IF({run_cell}="","",IF({signed}=0,"UNSIGNED",'
+        f'IF({matching}=0,"SIGNATURE_MISMATCH",'
+        f'IF({matching_witness}=0,"SIGNED_UNWITNESSED","SIGNED_WITNESSED"))))'
+    )
 
 
 def reaction_master_excel_formula(header: str, row_number: int) -> str:
@@ -227,12 +261,12 @@ def reaction_master_excel_formula(header: str, row_number: int) -> str:
         "Actual equivalent ratio": f'=IF(OR({run_cell}="",$AI{row_number}=0),"",$AH{row_number}/$AI{row_number})',
         "Stoichiometry status": f'=IF({run_cell}="","",IF(AND($AB{row_number}="",$AC{row_number}="",$AD{row_number}=""),"NOT_CONFIGURED",IF(OR($AB{row_number}="",$AC{row_number}="",$AD{row_number}=""),"MISSING_TARGET_RATIO",IF(IFERROR(VLOOKUP({run_cell},Experiments!$A$2:$AB$1000,28,FALSE),"")="","MISSING_RATIO_TOLERANCE",IF($AE{row_number}=0,"MISSING_NUMERATOR_EQ",IF($AF{row_number}=0,"MISSING_DENOMINATOR_EQ",IF(ABS($AG{row_number}-$AD{row_number})<=$AD{row_number}*VLOOKUP({run_cell},Experiments!$A$2:$AB$1000,28,FALSE)/100,"READY","RATIO_MISMATCH")))))))',
         "Material transactions": f'=IF({run_cell}="","",COUNTIF(\'Inventory Transactions\'!$D$2:$D$1000,{run_cell}))',
-        "Signature status": f'=IF({run_cell}="","",IF(COUNTIFS(\'Record Signatures\'!$B$2:$B$1000,{run_cell},\'Record Signatures\'!$H$2:$H$1000,"signed")=0,"UNSIGNED",IF(COUNTIFS(\'Record Signatures\'!$B$2:$B$1000,{run_cell},\'Record Signatures\'!$H$2:$H$1000,"signed",\'Record Signatures\'!$I$2:$I$1000,"<>")=0,"SIGNED_UNWITNESSED","SIGNED_WITNESSED")))',
+        "Signature status": "=" + signature_status_expression(run_cell),
         "Signed by": f'=IF({run_cell}="","",IFERROR(LOOKUP(2,1/((\'Record Signatures\'!$B$2:$B$1000={run_cell})*(\'Record Signatures\'!$H$2:$H$1000="signed")),\'Record Signatures\'!$D$2:$D$1000),""))',
         "Signed at": f'=IF({run_cell}="","",IFERROR(MAXIFS(\'Record Signatures\'!$E$2:$E$1000,\'Record Signatures\'!$B$2:$B$1000,{run_cell},\'Record Signatures\'!$H$2:$H$1000,"signed"),""))',
         "Witnessed by": f'=IF({run_cell}="","",IFERROR(LOOKUP(2,1/((\'Record Signatures\'!$B$2:$B$1000={run_cell})*(\'Record Signatures\'!$H$2:$H$1000="signed")*(\'Record Signatures\'!$I$2:$I$1000<>"")),\'Record Signatures\'!$I$2:$I$1000),""))',
         "Witnessed at": f'=IF({run_cell}="","",IFERROR(MAXIFS(\'Record Signatures\'!$J$2:$J$1000,\'Record Signatures\'!$B$2:$B$1000,{run_cell},\'Record Signatures\'!$H$2:$H$1000,"signed"),""))',
-        "Governance status": f'=IF({run_cell}="","",IF($AL{row_number}="","TEMPLATE_MISSING",IF(COUNTIFS(\'Experiment Templates\'!$A$2:$A$1000,$AL{row_number},\'Experiment Templates\'!$D$2:$D$1000,$AM{row_number},\'Experiment Templates\'!$E$2:$E$1000,"effective")=0,"TEMPLATE_NOT_EFFECTIVE",IF($F{row_number}<>"complete","IN_PROGRESS",IF($AU{row_number}<>"READY",$AU{row_number},IF($AV{row_number}<>"READY",$AV{row_number},IF($AW{row_number}<>"READY",$AW{row_number},IF($AO{row_number}="UNSIGNED","SIGNOFF_REQUIRED",IF($AO{row_number}="SIGNED_UNWITNESSED","WITNESS_REQUIRED","READY_TO_ARCHIVE")))))))))',
+        "Governance status": f'=IF({run_cell}="","",IF($AL{row_number}="","TEMPLATE_MISSING",IF(COUNTIFS(\'Experiment Templates\'!$A$2:$A$1000,$AL{row_number},\'Experiment Templates\'!$D$2:$D$1000,$AM{row_number},\'Experiment Templates\'!$E$2:$E$1000,"effective")=0,"TEMPLATE_NOT_EFFECTIVE",IF($F{row_number}<>"complete","IN_PROGRESS",IF($AU{row_number}<>"READY",$AU{row_number},IF($AV{row_number}<>"READY",$AV{row_number},IF($AW{row_number}<>"READY",$AW{row_number},IF($AO{row_number}="UNSIGNED","SIGNOFF_REQUIRED",IF($AO{row_number}="SIGNED_UNWITNESSED","WITNESS_REQUIRED",IF($AO{row_number}="SIGNED_WITNESSED","READY_TO_ARCHIVE",$AO{row_number}))))))))))',
         "Section readiness": f'=IF({run_cell}="","",IF(COUNTIFS(\'Notebook Sections\'!$A$2:$A$1000,{run_cell},\'Notebook Sections\'!$F$2:$F$1000,"true")=0,"SECTIONS_MISSING",IF(COUNTIFS(\'Notebook Sections\'!$A$2:$A$1000,{run_cell},\'Notebook Sections\'!$F$2:$F$1000,"true",\'Notebook Sections\'!$G$2:$G$1000,"<>complete")>0,"SECTIONS_INCOMPLETE","READY")))',
         "Raw data readiness": f'=IF({run_cell}="","",IF(COUNTIF(Measurements!$A$2:$A$1000,{run_cell})=0,"MEASUREMENTS_MISSING",IF(COUNTIFS(Measurements!$A$2:$A$1000,{run_cell},Measurements!$K$2:$K$1000,"")>0,"RAW_FILE_LINKS_MISSING","READY")))',
         "Outcome readiness": f'=IF({run_cell}="","",IF(COUNTIF(\'Reaction Outcomes\'!$A$2:$A$1000,{run_cell})=0,"OUTCOME_MISSING",IF(COUNTIFS(\'Reaction Outcomes\'!$A$2:$A$1000,{run_cell},\'Reaction Outcomes\'!$S$2:$S$1000,"complete",\'Reaction Outcomes\'!$T$2:$T$1000,"CLOSED")=0,"OUTCOME_INCOMPLETE","READY")))',
@@ -274,12 +308,12 @@ def google_reaction_master_array_formulas(end_row: int = 1000) -> dict[str, str]
             "Actual equivalent ratio": f'=ARRAYFORMULA(IF((A2:A{end_row}="")+(AI2:AI{end_row}=0),"",AH2:AH{end_row}/AI2:AI{end_row}))',
             "Stoichiometry status": f'=MAP(A2:A{end_row},AB2:AB{end_row},AC2:AC{end_row},AD2:AD{end_row},AE2:AE{end_row},AF2:AF{end_row},AG2:AG{end_row},LAMBDA(id,numgrp,dengrp,target,numeq,deneq,ratio,IF(id="","",IF(AND(numgrp="",dengrp="",target=""),"NOT_CONFIGURED",IF(OR(numgrp="",dengrp="",target=""),"MISSING_TARGET_RATIO",IF(IFNA(VLOOKUP(id,Experiments!A2:AB{end_row},28,FALSE),"")="","MISSING_RATIO_TOLERANCE",IF(numeq=0,"MISSING_NUMERATOR_EQ",IF(deneq=0,"MISSING_DENOMINATOR_EQ",IF(ABS(ratio-target)<=target*VLOOKUP(id,Experiments!A2:AB{end_row},28,FALSE)/100,"READY","RATIO_MISMATCH")))))))))',
             "Material transactions": f'=MAP(A2:A{end_row},LAMBDA(id,IF(id="","",COUNTIF(\'Inventory Transactions\'!D2:D{end_row},id))))',
-            "Signature status": f'=MAP(A2:A{end_row},LAMBDA(id,IF(id="","",IF(COUNTIFS(\'Record Signatures\'!B2:B{end_row},id,\'Record Signatures\'!H2:H{end_row},"signed")=0,"UNSIGNED",IF(COUNTIFS(\'Record Signatures\'!B2:B{end_row},id,\'Record Signatures\'!H2:H{end_row},"signed",\'Record Signatures\'!I2:I{end_row},"<>")=0,"SIGNED_UNWITNESSED","SIGNED_WITNESSED")))))',
+            "Signature status": f'=MAP(A2:A{end_row},LAMBDA(id,{signature_status_expression("id", end_row)}))',
             "Signed by": f'=MAP(A2:A{end_row},LAMBDA(id,IF(id="","",IFNA(LOOKUP(2,1/((\'Record Signatures\'!B2:B{end_row}=id)*(\'Record Signatures\'!H2:H{end_row}="signed")),\'Record Signatures\'!D2:D{end_row}),""))))',
             "Signed at": f'=MAP(A2:A{end_row},LAMBDA(id,IF(id="","",IFNA(MAXIFS(\'Record Signatures\'!E2:E{end_row},\'Record Signatures\'!B2:B{end_row},id,\'Record Signatures\'!H2:H{end_row},"signed"),""))))',
             "Witnessed by": f'=MAP(A2:A{end_row},LAMBDA(id,IF(id="","",IFNA(LOOKUP(2,1/((\'Record Signatures\'!B2:B{end_row}=id)*(\'Record Signatures\'!H2:H{end_row}="signed")*(\'Record Signatures\'!I2:I{end_row}<>"")),\'Record Signatures\'!I2:I{end_row}),""))))',
             "Witnessed at": f'=MAP(A2:A{end_row},LAMBDA(id,IF(id="","",IFNA(MAXIFS(\'Record Signatures\'!J2:J{end_row},\'Record Signatures\'!B2:B{end_row},id,\'Record Signatures\'!H2:H{end_row},"signed"),""))))',
-            "Governance status": f'=MAP(A2:A{end_row},F2:F{end_row},AL2:AL{end_row},AM2:AM{end_row},AO2:AO{end_row},AU2:AU{end_row},AV2:AV{end_row},AW2:AW{end_row},LAMBDA(id,runstatus,template,version,signature,sections,rawdata,outcome,IF(id="","",IF(template="","TEMPLATE_MISSING",IF(COUNTIFS(\'Experiment Templates\'!A2:A{end_row},template,\'Experiment Templates\'!D2:D{end_row},version,\'Experiment Templates\'!E2:E{end_row},"effective")=0,"TEMPLATE_NOT_EFFECTIVE",IF(runstatus<>"complete","IN_PROGRESS",IF(sections<>"READY",sections,IF(rawdata<>"READY",rawdata,IF(outcome<>"READY",outcome,IF(signature="UNSIGNED","SIGNOFF_REQUIRED",IF(signature="SIGNED_UNWITNESSED","WITNESS_REQUIRED","READY_TO_ARCHIVE")))))))))))',
+            "Governance status": f'=MAP(A2:A{end_row},F2:F{end_row},AL2:AL{end_row},AM2:AM{end_row},AO2:AO{end_row},AU2:AU{end_row},AV2:AV{end_row},AW2:AW{end_row},LAMBDA(id,runstatus,template,version,signature,sections,rawdata,outcome,IF(id="","",IF(template="","TEMPLATE_MISSING",IF(COUNTIFS(\'Experiment Templates\'!A2:A{end_row},template,\'Experiment Templates\'!D2:D{end_row},version,\'Experiment Templates\'!E2:E{end_row},"effective")=0,"TEMPLATE_NOT_EFFECTIVE",IF(runstatus<>"complete","IN_PROGRESS",IF(sections<>"READY",sections,IF(rawdata<>"READY",rawdata,IF(outcome<>"READY",outcome,IF(signature="UNSIGNED","SIGNOFF_REQUIRED",IF(signature="SIGNED_UNWITNESSED","WITNESS_REQUIRED",IF(signature="SIGNED_WITNESSED","READY_TO_ARCHIVE",signature))))))))))))',
             "Section readiness": f'=MAP(A2:A{end_row},LAMBDA(id,IF(id="","",IF(COUNTIFS(\'Notebook Sections\'!A2:A{end_row},id,\'Notebook Sections\'!F2:F{end_row},"true")=0,"SECTIONS_MISSING",IF(COUNTIFS(\'Notebook Sections\'!A2:A{end_row},id,\'Notebook Sections\'!F2:F{end_row},"true",\'Notebook Sections\'!G2:G{end_row},"<>complete")>0,"SECTIONS_INCOMPLETE","READY")))))',
             "Raw data readiness": f'=MAP(A2:A{end_row},LAMBDA(id,IF(id="","",IF(COUNTIF(Measurements!A2:A{end_row},id)=0,"MEASUREMENTS_MISSING",IF(COUNTIFS(Measurements!A2:A{end_row},id,Measurements!K2:K{end_row},"")>0,"RAW_FILE_LINKS_MISSING","READY")))))',
             "Outcome readiness": f'=MAP(A2:A{end_row},LAMBDA(id,IF(id="","",IF(COUNTIF(\'Reaction Outcomes\'!A2:A{end_row},id)=0,"OUTCOME_MISSING",IF(COUNTIFS(\'Reaction Outcomes\'!A2:A{end_row},id,\'Reaction Outcomes\'!S2:S{end_row},"complete",\'Reaction Outcomes\'!T2:T{end_row},"CLOSED")=0,"OUTCOME_INCOMPLETE","READY")))))',

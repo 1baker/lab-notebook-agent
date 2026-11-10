@@ -445,6 +445,7 @@ def run_live_google_setup(
         spreadsheet_id,
         client,
         value_range=f"A1:AZ{max(2, validation_end_row)}",
+        value_render_option="FORMULA",
     )
     tables = snapshot_to_tables(snapshot)
     setup_audit = google_setup_audit_from_metadata(

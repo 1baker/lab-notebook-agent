@@ -161,6 +161,25 @@ class ScientistWorkspaceTests(unittest.TestCase):
         self.assertEqual("READY_TO_ARCHIVE", ready["governance_status"])
         self.assertEqual(1, ready["material_transactions"])
 
+    def test_known_signature_fingerprint_mismatch_blocks_visible_archive_readiness(self) -> None:
+        experiment = {"experiment_id": "SYN-1", "status": "complete", "template_id": "TPL-1",
+                      "template_version": "1", "record_fingerprint": "current"}
+        templates = [{"template_id": "TPL-1", "version": "1", "state": "effective"}]
+        signatures = [{"experiment_id": "SYN-1", "status": "signed", "record_fingerprint": "old",
+                       "witnessed_by": "Reviewer", "witnessed_at": "2026-01-01T12:00:00"}]
+        result = summarize_record_governance(experiment, templates, signatures, [])
+        self.assertEqual("SIGNATURE_MISMATCH", result["governance_status"])
+        signatures.append({**signatures[0], "record_fingerprint": "current"})
+        self.assertEqual("READY_TO_ARCHIVE", summarize_record_governance(experiment, templates, signatures, [])["governance_status"])
+        for formula in (reaction_master_excel_formula("Signature status", 2),
+                        google_reaction_master_array_formulas()["Signature status"]):
+            self.assertIn("SIGNATURE_MISMATCH", formula)
+            self.assertIn("32,FALSE", formula)
+            self.assertIn("Record Signatures", formula)
+        for formula in (reaction_master_excel_formula("Governance status", 2),
+                        google_reaction_master_array_formulas()["Governance status"]):
+            self.assertIn("SIGNED_WITNESSED", formula)
+
     def test_live_upgrade_adds_entry_sheets_seeds_history_and_adds_two_charts(self) -> None:
         metadata = {
             "properties": {"timeZone": "America/Chicago"},

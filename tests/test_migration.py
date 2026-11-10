@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from lab_notebook_agent.google_api import run_live_google_setup
 from lab_notebook_agent.google_sheets import (
     append_cells_request,
     generated_sheet_ids_for_missing,
@@ -9,7 +10,7 @@ from lab_notebook_agent.google_sheets import (
     google_setup_requests_from_metadata,
     replace_sheet_rows_requests,
 )
-from lab_notebook_agent.schema import RUN_CONSOLE_SHEET, SHEETS, workbook_contract
+from lab_notebook_agent.schema import RUN_CONSOLE_SHEET, SHEETS, sheet_by_name, workbook_contract
 
 
 class WorkbookMigrationTests(unittest.TestCase):
@@ -18,6 +19,56 @@ class WorkbookMigrationTests(unittest.TestCase):
             spec.name: index
             for index, spec in enumerate(SHEETS, start=100)
         }
+
+    def test_repeated_setup_preserves_formulas_and_normalizes_editable_inputs(self) -> None:
+        class FakeClient:
+            def __init__(self):
+                self.render_options = []
+
+            def get_metadata(self, spreadsheet_id):
+                return {"properties": {}, "sheets": [
+                    {"properties": {"sheetId": index + 100, "title": spec.name,
+                                     "gridProperties": {"rowCount": 1000, "columnCount": 100}}}
+                    for index, spec in enumerate(SHEETS)
+                ]}
+
+            def get_values(self, spreadsheet_id, sheet_name, value_range,
+                           value_render_option="FORMATTED_VALUE"):
+                self.render_options.append(value_render_option)
+                spec = sheet_by_name(sheet_name)
+                rows = []
+                if sheet_name == "Batch Builder":
+                    rows = [{"experiment_id": "SYN-1", "planned_mass_g":
+                             "=ARRAYFORMULA(K2:K3)" if value_render_option == "FORMULA" else "10"},
+                            {"experiment_id": "SYN-1", "planned_mass_g": "20"}]
+                elif sheet_name == "Experiments":
+                    rows = [{"experiment_id": "SYN-1", "target_batch_mass_g": "20",
+                             "default_mass_tolerance_percent":
+                             "=1+1" if value_render_option == "FORMULA" else "2"}]
+                return [list(spec.headers)] + [[row.get(header, "") for header in spec.headers] for row in rows]
+
+            def batch_update(self, *args):
+                raise AssertionError("This migration regression must remain a dry run")
+
+        client = FakeClient()
+        run = run_live_google_setup("synthetic", client, validation_end_row=3)
+        writes = [request["updateCells"] for request in run["batch_update_requests"] if "updateCells" in request]
+        batch_id = self.sheet_ids["Batch Builder"]
+        planned_writes = [row["values"][0]["userEnteredValue"]
+                          for update in writes
+                          if update.get("start", {}).get("sheetId") == batch_id
+                          and update["start"].get("columnIndex") == 11
+                          and update["start"].get("rowIndex", 0) >= 1
+                          for row in update["rows"]]
+        self.assertEqual(1, len(planned_writes), planned_writes)
+        self.assertIn("formulaValue", planned_writes[0])
+        experiment_writes = {update["start"].get("columnIndex"): update["rows"][0]["values"][0]["userEnteredValue"]
+                             for update in writes
+                             if update.get("start", {}).get("sheetId") == self.sheet_ids["Experiments"]
+                             and update["start"].get("rowIndex") == 1}
+        self.assertEqual({"numberValue": 20}, experiment_writes[22])
+        self.assertNotIn(23, experiment_writes)
+        self.assertEqual({"FORMULA"}, set(client.render_options))
 
     def test_contract_adds_operational_lineage_and_qc_tabs(self) -> None:
         contract = workbook_contract()

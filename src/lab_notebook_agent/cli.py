@@ -64,6 +64,7 @@ from .project_notebook import (
     apply_project_notebook_sync_report_to_workbook,
     build_project_notebook_sync_report,
     parse_project_notebook_workbook,
+    validate_source_workbook_output,
 )
 from .plotting import (
     apply_plot_report_to_workbook,
@@ -1624,11 +1625,11 @@ def main(argv: list[str] | None = None) -> int:
             if args.workbook_output
             else target_path
         )
-        if args.apply and source_path == target_path and output_path == source_path:
-            raise SystemExit(
-                "The source workbook is read-only. Use a different --target-workbook "
-                "or --workbook-output."
-            )
+        if args.apply:
+            try:
+                validate_source_workbook_output(source_path, output_path)
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
         parsed_sources = parse_project_notebook_workbook(
             source_path,
             tuple(args.source_sheet),
@@ -1644,6 +1645,7 @@ def main(argv: list[str] | None = None) -> int:
                 target_path,
                 report,
                 output_path,
+                source_workbook=source_path,
             )
             apply_plot_report_to_workbook(destination, plot_report, destination)
             report["applied"] = True

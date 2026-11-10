@@ -2937,19 +2937,29 @@ def google_type_normalization_requests(
     tables: dict[str, list[dict[str, Any]]],
     sheet_ids: dict[str, int],
 ) -> list[dict[str, Any]]:
-    """Rewrite parseable typed cells without changing text fields or blank cells."""
+    """Normalize editable typed inputs without replacing formulas or spill outputs."""
 
     requests: list[dict[str, Any]] = []
+    calculated_columns = {
+        "Batch Builder": set(BATCH_BUILDER_FORMULA_COLUMNS),
+        "Reaction Outcomes": set(REACTION_OUTCOME_FORMULA_COLUMNS),
+    }
     for sheet_name, rows in tables.items():
-        if sheet_name not in sheet_ids:
+        if sheet_name not in sheet_ids or sheet_name == "Reaction Master":
             continue
         headers = list(sheet_by_name(sheet_name).headers)
         for row_index, row in enumerate(rows, start=1):
             for column_index, header in enumerate(headers):
+                if header in calculated_columns.get(sheet_name, ()):
+                    continue
                 data_type = column_data_type(sheet_name, header)
                 if data_type == "text":
                     continue
                 value = row.get(header, "")
+                # Setup captures FORMULA values so formulas in editable input
+                # columns remain identifiable; spill children need the exclusions above.
+                if isinstance(value, str) and value.startswith("="):
+                    continue
                 entered_value = google_user_entered_value(value, data_type=data_type)
                 if not entered_value or "stringValue" in entered_value:
                     continue

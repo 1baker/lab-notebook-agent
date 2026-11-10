@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -438,6 +439,57 @@ class BatchBuilderTests(unittest.TestCase):
             {"Formulations": [], "Batch Builder": [charge]}
         )
         self.assertEqual([projected], combined)
+
+    def test_distinct_charge_ids_survive_canonical_projection(self) -> None:
+        rows = [{"experiment_id": "SYN-1", "charge_id": "SEED-1", "stage": "seed",
+                 "charge_type": "initial", "reagent_id": "WATER", "target_role": "aqueous_phase", "planned_mass_g": 10},
+                {"experiment_id": "SYN-1", "charge_id": "CORE-1", "stage": "core",
+                 "charge_type": "feed", "reagent_id": "WATER", "target_role": "aqueous_phase", "planned_mass_g": 20}]
+        tables = {"Batch Builder": rows, "Formulations": []}
+        original = deepcopy(tables)
+        combined = formulation_rows_from_tables(tables)
+        self.assertEqual(["SEED-1", "CORE-1"], [row["charge_id"] for row in combined])
+        self.assertEqual(30, sum(row["mass_g"] for row in combined))
+        self.assertEqual(original, tables)
+
+    def test_legacy_phases_are_preserved_and_matching_mirrors_deduplicate(self) -> None:
+        legacy = [{"experiment_id": "SYN-1", "reagent_id": "WATER", "target_role": "aqueous_phase",
+                   "phase": "seed / initial", "mass_g": 10},
+                  {"experiment_id": "SYN-1", "reagent_id": "WATER", "target_role": "aqueous_phase",
+                   "phase": "core / feed", "mass_g": 20}]
+        self.assertEqual(2, len(formulation_rows_from_tables({"Formulations": legacy})))
+        charges = [{**row, "charge_id": charge_id, "stage": stage, "charge_type": kind,
+                    "planned_mass_g": row["mass_g"]}
+                   for row, charge_id, stage, kind in zip(legacy, ("SEED-1", "CORE-1"),
+                                                         ("seed", "core"), ("initial", "feed"))]
+        tables = {"Formulations": legacy, "Batch Builder": charges}
+        original = deepcopy(tables)
+        combined = formulation_rows_from_tables(tables)
+        self.assertEqual(2, len(combined))
+        self.assertEqual(30, sum(row["mass_g"] for row in combined))
+        self.assertEqual(original, tables)
+
+    def test_single_unphased_legacy_mirror_is_still_suppressed(self) -> None:
+        legacy = {"experiment_id": "SYN-1", "reagent_id": "WATER", "target_role": "aqueous_phase", "mass_g": 10}
+        charge = {**legacy, "charge_id": "SEED-1", "stage": "seed", "charge_type": "initial", "planned_mass_g": 10}
+        combined = formulation_rows_from_tables({"Formulations": [legacy], "Batch Builder": [charge]})
+        self.assertEqual(1, len(combined))
+        self.assertEqual("SEED-1", combined[0]["charge_id"])
+
+    def test_original_legacy_phase_labels_match_unambiguous_charge_types(self) -> None:
+        for phase, charge_type in (("monomer feed", "monomer_pre_emulsion"),
+                                   ("initiator feed", "initiator_feed"),
+                                   ("aqueous", "aqueous_pre_emulsion")):
+            with self.subTest(phase=phase):
+                legacy = {"experiment_id": "SYN-1", "reagent_id": "MATERIAL",
+                          "target_role": "reactant", "phase": phase, "mass_g": 10}
+                charge = {**legacy, "charge_id": "CORE-1", "stage": "core",
+                          "charge_type": charge_type, "planned_mass_g": 10}
+                combined = formulation_rows_from_tables({"Formulations": [legacy], "Batch Builder": [charge]})
+                self.assertEqual(1, len(combined))
+                second_stage = {**charge, "charge_id": "SHELL-1", "stage": "shell"}
+                ambiguous = formulation_rows_from_tables({"Formulations": [legacy], "Batch Builder": [charge, second_stage]})
+                self.assertEqual(3, len(ambiguous))
 
 
 if __name__ == "__main__":

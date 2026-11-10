@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -540,6 +541,64 @@ class ProjectNotebookSyncTests(unittest.TestCase):
                         "--apply",
                     ]
                 )
+
+    def test_distinct_target_cannot_write_to_source_or_its_alias(self) -> None:
+        for alias_kind in ("same_path", "hardlink", "symlink"):
+            with self.subTest(alias=alias_kind), tempfile.TemporaryDirectory() as tmpdir:
+                source = Path(tmpdir) / "source.xlsx"
+                target = Path(tmpdir) / "target.xlsx"
+                workbook = Workbook()
+                workbook.active.title = "PEG40 Batch"
+                for row in ledger_values():
+                    workbook.active.append(row)
+                workbook.save(source)
+                workbook.close()
+                workbook = Workbook()
+                workbook.active.title = "Experiments"
+                workbook.active.append(list(next(spec for spec in SHEETS if spec.name == "Experiments").headers))
+                workbook.save(target)
+                workbook.close()
+                output = source
+                if alias_kind != "same_path":
+                    output = Path(tmpdir) / "alias.xlsx"
+                    if alias_kind == "hardlink":
+                        os.link(source, output)
+                    else:
+                        output.symlink_to(source)
+                original = source.read_bytes()
+                with self.assertRaisesRegex(SystemExit, "source workbook is read-only"):
+                    main(["project-notebook-sync", "--source-workbook", str(source),
+                          "--target-workbook", str(target), "--source-sheet", "PEG40 Batch",
+                          "--apply", "--workbook-output", str(output),
+                          "--report-output", str(Path(tmpdir) / "report.json")])
+                self.assertEqual(original, source.read_bytes())
+
+    def test_direct_apply_preserves_authoritative_source_from_local_report(self) -> None:
+        for alias_kind in ("same_path", "hardlink"):
+            with self.subTest(alias=alias_kind), tempfile.TemporaryDirectory() as tmpdir:
+                source = Path(tmpdir) / "source.xlsx"
+                target = Path(tmpdir) / "target.xlsx"
+                workbook = Workbook()
+                workbook.active.title = "PEG40 Batch"
+                for row in ledger_values():
+                    workbook.active.append(row)
+                workbook.save(source)
+                workbook.close()
+                workbook = Workbook()
+                workbook.active.title = "Experiments"
+                workbook.active.append(list(next(spec for spec in SHEETS if spec.name == "Experiments").headers))
+                workbook.save(target)
+                workbook.close()
+                report = build_project_notebook_sync_report(parse_project_notebook_workbook(
+                    source, ("PEG40 Batch",)), {})
+                output = source
+                if alias_kind == "hardlink":
+                    output = Path(tmpdir) / "alias.xlsx"
+                    os.link(source, output)
+                original = source.read_bytes()
+                with self.assertRaisesRegex(ValueError, "source workbook is read-only"):
+                    apply_project_notebook_sync_report_to_workbook(target, report, output)
+                self.assertEqual(original, source.read_bytes())
 
 
 class RoutingSheetsClient:

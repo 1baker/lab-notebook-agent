@@ -289,19 +289,19 @@ def parse_project_notebook_workbook(
                         values_only=True,
                     )
                 ]
-            parsed_sources.append(
-                parse_project_notebook_sheet(
-                    values,
-                    source_spreadsheet_id=str(source),
-                    source_title=source.name,
-                    source_sheet_name=sheet_name,
-                    source_url=str(source),
-                    source_modified_at=modified_at,
-                    source_range=source_range,
-                    parser_profile=parser_profile,
-                    synced_at=synced_at,
-                )
+            parsed = parse_project_notebook_sheet(
+                values,
+                source_spreadsheet_id=str(source),
+                source_title=source.name,
+                source_sheet_name=sheet_name,
+                source_url=str(source),
+                source_modified_at=modified_at,
+                source_range=source_range,
+                parser_profile=parser_profile,
+                synced_at=synced_at,
             )
+            parsed["source_workbook_path"] = str(source)
+            parsed_sources.append(parsed)
     finally:
         workbook.close()
     return parsed_sources
@@ -1000,6 +1000,10 @@ def build_project_notebook_sync_report(
 
     report = {
         "schema": "lab-notebook-agent-project-notebook-sync.v1",
+        "source_workbook_paths": sorted({
+            str(parsed["source_workbook_path"])
+            for parsed in parsed_sources if parsed.get("source_workbook_path")
+        }),
         "append_experiments": append_experiments,
         "update_experiments": update_experiments,
         "append_project_notebook_records": append_records,
@@ -1029,9 +1033,16 @@ def apply_project_notebook_sync_report_to_workbook(
     workbook_path: str | Path,
     report: dict[str, Any],
     output_workbook: str | Path | None = None,
+    *,
+    source_workbook: str | Path | None = None,
 ) -> Path:
     source = Path(workbook_path).expanduser().resolve()
     destination = Path(output_workbook).expanduser().resolve() if output_workbook else source
+    protected_sources = list(report.get("source_workbook_paths", []))
+    if source_workbook is not None:
+        protected_sources.append(source_workbook)
+    for protected_source in protected_sources:
+        validate_source_workbook_output(protected_source, destination)
     workbook = load_workbook(source)
     ensure_workbook_contract(workbook)
     for sheet_name, report_key in (
@@ -1066,6 +1077,17 @@ def apply_project_notebook_sync_report_to_workbook(
     destination.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(destination)
     return destination
+
+
+def validate_source_workbook_output(source_workbook: str | Path, output_workbook: str | Path) -> None:
+    """Refuse path, symlink, and hard-link aliases of an authoritative source."""
+
+    source = Path(source_workbook).expanduser().resolve()
+    output = Path(output_workbook).expanduser().resolve()
+    if source == output or (source.exists() and output.exists() and source.samefile(output)):
+        raise ValueError(
+            "The source workbook is read-only. Use a different --target-workbook or --workbook-output."
+        )
 
 
 def ensure_workbook_contract(workbook: Any) -> None:

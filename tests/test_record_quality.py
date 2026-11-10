@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from lab_notebook_agent.preflight import build_experiment_preflight_report
+from lab_notebook_agent.scientist_workspace import summarize_record_governance
 
 
 def complete_record_tables() -> dict[str, list[dict[str, object]]]:
@@ -115,6 +116,11 @@ class RecordQualityTests(unittest.TestCase):
         checks = {row["name"]: row for row in report["checks"]}
         self.assertEqual("fail", checks["signature_integrity"]["status"])
         self.assertFalse(report["ready_to_archive"])
+        visible = summarize_record_governance(
+            tables["Experiments"][0], tables["Experiment Templates"], tables["Record Signatures"], [],
+            tables["Notebook Sections"], tables["Measurements"], tables["Reaction Outcomes"],
+        )
+        self.assertEqual("SIGNATURE_MISMATCH", visible["governance_status"])
 
 
 if __name__ == "__main__":
