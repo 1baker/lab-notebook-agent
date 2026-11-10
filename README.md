@@ -1,5 +1,26 @@
 # Lab Notebook Agent
 
+**In one sentence:** Lab Notebook Agent creates a ready-made spreadsheet lab notebook (reagents, recipes, observations, results), searches what you have recorded, and suggests a next experiment with links to the literature.
+
+**Who it is for:** Lab scientists who want a consistent digital notebook instead of scattered notes.
+
+![Terminal showing the notebook workbook being created and its eleven tabs](docs/images/how-it-works.png)
+
+*Real output: one command creates the notebook workbook; these are its tabs and first columns.*
+
+**How it works:**
+
+```mermaid
+flowchart LR
+    You[You record experiments] --> WB[Notebook spreadsheet]
+    WB --> Agent[Lab Notebook Agent]
+    Agent --> Next[Suggested next experiment]
+    Agent -->|optional| LS[LitScout literature search]
+```
+
+---
+
+
 This is the first scaffold for a Google Sheets-based daily lab notebook agent.
 
 For the deliberately smaller, formulation-first CCSP emulsion-polymerization
@@ -23,10 +44,23 @@ generates that workbook, searches curated process knowledge, and drafts a next
 experiment recommendation with copy/paste-ready LitScout commands for literature
 evidence.
 
+## Start with a local workbook
+
+Use Python 3.10+ from a cloned repository root (the folder containing `pyproject.toml`). Google credentials and LitScout are optional later integrations.
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m lab_notebook_agent.cli init --output artifacts/lab_notebook_template.xlsx
+```
+
+In plain English: This installs the workbook tool in a project environment and creates a local Excel template. It writes files locally; review the workbook before importing it into Google Sheets.
+
+Open the generated workbook and compare its tabs with [Workbook Tabs](#workbook-tabs). Continue with [Notebook Search](#notebook-search), then the optional [LitScout Bridge](#litscout-bridge). The full command reference below includes examples that write workbooks or contact configured services.
+
 ## Quick Start
 
 ```bash
-cd /home/bak3r/projects/lab-notebook-agent
 PYTHONPATH=src python3 -m lab_notebook_agent.cli init --output artifacts/lab_notebook_template.xlsx
 PYTHONPATH=src python3 -m lab_notebook_agent.cli schema --output artifacts/workbook_contract.json
 PYTHONPATH=src python3 -m lab_notebook_agent.cli search-notebook --workbook artifacts/lab_notebook_template.xlsx "emulsion polymerization surfactant particle size" --output artifacts/notebook-search-emulsion.json
